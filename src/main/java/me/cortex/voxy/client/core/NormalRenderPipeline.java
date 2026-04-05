@@ -11,7 +11,9 @@ import me.cortex.voxy.client.core.rendering.hierachical.HierarchicalOcclusionTra
 import me.cortex.voxy.client.core.rendering.hierachical.NodeCleaner;
 import me.cortex.voxy.client.core.rendering.post.FullscreenBlit;
 import me.cortex.voxy.client.core.rendering.util.DepthFramebuffer;
+import me.cortex.voxy.client.core.util.CapturedFogState;
 import me.cortex.voxy.client.core.util.GPUTiming;
+import net.minecraft.client.Minecraft;
 import org.joml.Matrix4f;
 import org.lwjgl.system.MemoryStack;
 
@@ -34,14 +36,16 @@ public class NormalRenderPipeline extends AbstractRenderPipeline {
     private GlTexture colourSSAOTex;
     private final GlFramebuffer fbSSAO = new GlFramebuffer();
 
+    private final boolean useEnvFog;
     private final FullscreenBlit finalBlit;
 
     private final SSAO ssao;
 
     protected NormalRenderPipeline(AsyncNodeManager nodeManager, NodeCleaner nodeCleaner, HierarchicalOcclusionTraverser traversal, BooleanSupplier frexSupplier) {
         super(nodeManager, nodeCleaner, traversal, frexSupplier, false);
+        this.useEnvFog = VoxyConfig.CONFIG.useEnvironmentalFog;
         this.finalBlit = new FullscreenBlit("voxy:post/blit_texture_depth_cutout.frag",
-                a->a.define("EMIT_COLOUR"));
+                a->a.defineIf("USE_ENV_FOG", this.useEnvFog).define("EMIT_COLOUR"));
 
 
         this.ssao = SSAO.createSSAO(VoxyConfig.CONFIG.getSSAOMode());
@@ -85,6 +89,23 @@ public class NormalRenderPipeline extends AbstractRenderPipeline {
     @Override
     protected void finish(Viewport<?> viewport, int sourceFrameBuffer, int srcWidth, int srcHeight) {
         this.finalBlit.bind();
+
+        if (this.useEnvFog) {
+            if (CapturedFogState.isValid() && !CapturedFogState.fogWasSuppressed() && Math.abs(CapturedFogState.getFogEnd() - CapturedFogState.getFogStart()) > 1.0f) {
+                float start = CapturedFogState.getFogStart();
+                float end = CapturedFogState.getFogEnd();
+                float invEndFogDelta = 1f / (end - start);
+                float endDistance = Math.max(Minecraft.getInstance().gameRenderer.getRenderDistance(), 20 * 16);
+                endDistance *= (float) Math.sqrt(3);
+                float startDelta = -start * invEndFogDelta;
+                float fogMax = Math.max(0.0f, Math.min(endDistance * invEndFogDelta + startDelta, 1.0f));
+                glUniform4f(4, invEndFogDelta, startDelta, fogMax, 0.0f);
+                glUniform4f(5, CapturedFogState.getFogRed(), CapturedFogState.getFogGreen(), CapturedFogState.getFogBlue(), CapturedFogState.getFogAlpha());
+            } else {
+                glUniform4f(4, 0.0f, 0.0f, 0.0f, 0.0f);
+                glUniform4f(5, 0.0f, 0.0f, 0.0f, 0.0f);
+            }
+        }
 
         glBindTextureUnit(3, this.colourSSAOTex.id);
 

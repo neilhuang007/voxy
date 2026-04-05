@@ -1,201 +1,355 @@
 # Fog Downport Plan
 
-## Context
+## Goal
 
-This repository is a **downport** of newer Voxy behavior onto the 1.21.1 client/rendering stack. The behavior we need to preserve on this branch is not "disable fog". It is the more specific render-flow contract that already exists in the current code:
+Bring the **upstream fog intent** onto the 1.21.1 branch in a way that is:
 
-1. let Minecraft finish resolving the frame's fog state,
-2. capture that resolved state for Voxy,
-3. prevent the live fog state from being applied directly to Voxy's raw distant-geometry pass when Voxy is active,
-4. then reapply the captured fog during Voxy's final composite.
+- achievable on the current 1.21.1 rendering stack,
+- low-risk,
+- easy to validate step by step,
+- and careful not to break existing 1.21.1 rendering behavior.
 
-The important point for this downport is **semantic equivalence**, not restoration of newer internal transport types. On 1.21.1, the code already achieves the behavior by reading the resolved fog values back from `RenderSystem` at the end of `FogRenderer.setupFog(...)` and then consuming those values from the Voxy composite pass: `src/main/java/me/cortex/voxy/client/mixin/minecraft/MixinFogRenderer.java:32-66`, `src/main/java/me/cortex/voxy/client/core/NormalRenderPipeline.java:91-127`.
+The target behavior is **not** "disable fog".
 
-## What the current code is doing
+The target behavior is:
 
-### Fog capture and suppression
+1. let Minecraft finish computing the frame's fog,
+2. preserve the useful fog state Voxy wants to keep,
+3. stop the live vanilla terrain-distance fog from directly fogging Voxy's raw distant pass,
+4. then reapply the preserved fog during Voxy's final composite.
 
-At the tail of `FogRenderer.setupFog(...)`, Voxy currently:
+This matches the verified upstream intent:
 
-- captures fog start from `RenderSystem.getShaderFogStart()`,
-- captures fog end from `RenderSystem.getShaderFogEnd()`,
-- captures fog color from `RenderSystem.getShaderFogColor()`,
-- and, when Voxy rendering is active, pushes the live fog far away so Voxy's raw pass is not directly fogged.
+- preserve atmospheric/environmental fog semantics where appropriate,
+- suppress the direct raw-pass distance/border fog contribution that conflicts with distant rendering,
+- keep final fog application under Voxy's control.
 
-That behavior is implemented in `src/main/java/me/cortex/voxy/client/mixin/minecraft/MixinFogRenderer.java:32-66`.
+## What was verified
 
-Important details from the current logic:
+### Verified upstream intent
 
-- suppression only happens when Voxy rendering is enabled and a Voxy render system is present: `src/main/java/me/cortex/voxy/client/mixin/minecraft/MixinFogRenderer.java:50-53`
-- suppression is skipped for very short fog distances (`fogEnd < 10.0f`): `src/main/java/me/cortex/voxy/client/mixin/minecraft/MixinFogRenderer.java:55`
-- fluid fog is preserved when environmental fog is enabled, and only force-suppressed when environmental fog is disabled: `src/main/java/me/cortex/voxy/client/mixin/minecraft/MixinFogRenderer.java:57-64`
+Upstream branches show a consistent design direction:
 
-### Final Voxy composite
+- when Voxy is active, the raw vanilla fog envelope used for terrain-distance fading is pushed far away,
+- environmental fog is treated separately,
+- the final render path consumes preserved fog data later.
 
-The final composite pass currently reads the captured fog state from mixin-owned static accessors and uses it to drive the environmental fog uniforms and the `fogCoversAllRendering` branch in `finish(...)`: `src/main/java/me/cortex/voxy/client/core/NormalRenderPipeline.java:91-127`.
+In newer upstream branches this fog data travels through viewport/fog-parameter transport, but that transport shape is **not** present on 1.21.1 and should not be recreated unless it is actually needed.
 
-This means the current runtime contract is already:
+### Verified current 1.21.1 reality
 
-- capture resolved fog from Minecraft,
-- suppress direct fogging for the raw Voxy pass,
-- reuse the captured values in the final composite.
+The current 1.21.1 branch does **not** yet implement the full capture-and-reapply contract.
 
-### Iris viewport lifecycle
+What it currently does is simpler:
 
-For the Iris path, Voxy captures per-frame viewport data at the start of `LevelRenderer.renderLevel(...)` and consumes it once during `IrisRenderingPipeline.beginLevelRendering(...)`: `src/main/java/me/cortex/voxy/client/mixin/iris/MixinLevelRenderer.java:30-58`, `src/main/java/me/cortex/voxy/client/mixin/iris/MixinIrisRenderingPipeline.java:44-52`.
+- at the tail of `FogRenderer.setupFog(...)`, when Voxy is active,
+- it checks the resolved `RenderSystem` fog end,
+- skips very short fog,
+- then pushes fog start and end far away.
 
-The transported viewport data currently contains matrices and camera position only, via `IrisUtil.CapturedViewportParameters`: `src/main/java/me/cortex/voxy/client/core/util/IrisUtil.java:16-22`.
+That means the current branch is already doing the **suppression** part, but not yet the full **capture + final composite reuse** part.
 
-The viewport capture is also already guarded against stale reuse by clearing the stored parameters when shaders are inactive, when no renderer is present, and immediately after consumption: `src/main/java/me/cortex/voxy/client/mixin/iris/MixinLevelRenderer.java:40-57`, `src/main/java/me/cortex/voxy/client/mixin/iris/MixinIrisRenderingPipeline.java:46-52`.
+## Design constraints for 1.21.1
 
-## Why the plan must stay 1.21.1-native
+To avoid breakage on 1.21.1, this plan must respect the branch's actual architecture.
 
-The current 1.21.1 code does **not** have a consumer that expects fog parameters to travel through `Viewport` setup. `VoxyRenderSystem.setupViewport(...)` currently accepts only matrices and camera coordinates and applies projection/model-view/camera/screen-size state to the viewport: `src/main/java/me/cortex/voxy/client/core/VoxyRenderSystem.java:174-218`.
+### Constraint 1: do not redesign viewport APIs first
 
-So the correct downport plan is **not**:
+On this branch:
 
-- to recreate newer fog-parameter transport APIs,
-- to push fog state through viewport setup just because newer branches once did,
-- or to rewrite fog math before proving a behavioral mismatch.
+- `VoxyRenderSystem.setupViewport(...)` accepts matrices and camera only,
+- `IrisUtil.CapturedViewportParameters` carries matrices and camera only,
+- `Viewport` does not currently own fog parameters.
 
-The correct downport plan is to keep the existing 1.21.1 behavior, but move the fog state ownership out of the mixin statics into an explicit Voxy-owned render-frame holder.
+So the safest first implementation is **not** to import newer-branch fog transport APIs into viewport setup.
 
-## Solidified goal
+### Constraint 2: keep the current fog hook timing
 
-Replace the current mixin-owned static fog transport with a small Voxy-owned frame fog state holder, while preserving the currently validated 1.21.1 behavior exactly.
+The current mixin runs at the tail of `FogRenderer.setupFog(...)`. That timing is valuable because Minecraft has already resolved the fog state for the frame by then.
 
-In other words, this is a **refactor of ownership and lifecycle clarity**, not a change in fog semantics.
+That means the safest 1.21.1 implementation should:
 
-## Solidified architecture
+- keep capture at the tail of `setupFog(...)`,
+- read the resolved fog values from `RenderSystem`,
+- suppress live fog only after capture,
+- and reuse the captured values later in Voxy's composite.
 
-Introduce one small fog-state holder class owned by Voxy code, likely under `me.cortex.voxy.client.core` or `me.cortex.voxy.client.core.util`.
+### Constraint 3: preserve the current suppression guardrails
 
-Recommended characteristics:
+The current branch already has several safety guardrails that should remain unchanged in the first pass:
 
-- stores `fogStart`
-- stores `fogEnd`
-- stores `fogColor[4]`
-- stores a `valid` flag
-- optionally stores a debug-only `fogSuppressedForVoxy` flag if useful during testing
+- only act for terrain fog,
+- only act when Voxy rendering is enabled,
+- only act when a Voxy render system is present,
+- skip very short fog distances.
 
-To avoid accidental drift from the current call sites, this holder should be treated as:
+Those guardrails reduce the chance of breaking fluid fog, special close-range fog, menu rendering, or unrelated vanilla paths.
 
-- **render-thread frame state**,
-- globally reachable from both the fog mixin and the final render pipeline,
-- overwritten each frame when `FogRenderer.setupFog(...)` runs,
-- and never used as a reason to redesign viewport APIs.
+## Step-by-step implementation plan
 
-A simple static holder class on the Voxy side is acceptable for the first implementation if that keeps behavior identical while removing ownership from `MixinFogRenderer`.
+This implementation should be done in small, verifiable steps.
 
-## Implementation plan
+---
 
-### Step 1: introduce the Voxy fog-state holder
+## Step 1: introduce a Voxy-owned frame fog holder
 
-Create a small holder class with:
+Create a small Voxy-side holder class for the current frame's fog state.
 
-- `set(start, end, color)`
+Recommended contents:
+
+- `float fogStart`
+- `float fogEnd`
+- `float[] fogColor` or four explicit color components
+- `boolean valid`
+- optional debug flag like `fogWasSuppressed`
+
+Recommended operations:
+
+- `set(start, end, r, g, b, a)`
 - `clear()`
-- read accessors
-- validity query
+- getters/accessors
+- `isValid()`
 
-Initial scope should stay minimal. No extra fog-shape abstractions should be introduced unless the current code proves they are necessary.
+### Why this is safe
 
-### Step 2: move fog ownership out of `MixinFogRenderer`
+- it keeps fog ownership in Voxy code,
+- it avoids expanding viewport APIs,
+- it lets the mixin and pipeline communicate without depending on mixin statics,
+- it is a pure refactor/setup step and should not change rendering yet.
 
-Update `MixinFogRenderer` so it:
+### Completion criteria
 
-- writes captured fog values into the new holder,
-- stops owning `voxy$capturedFogStart`, `voxy$capturedFogEnd`, and `voxy$capturedFogColor`,
-- keeps the current injection point at the tail of `FogRenderer.setupFog(...)`.
+- project compiles,
+- no rendering behavior changed yet,
+- no existing code path depends on fog holder contents yet.
 
-This preserves the existing 1.21.1 capture timing, which is the key runtime behavior: `src/main/java/me/cortex/voxy/client/mixin/minecraft/MixinFogRenderer.java:32-48`.
+---
 
-### Step 3: preserve suppression behavior exactly
+## Step 2: capture the resolved fog before suppression
 
-Keep the current suppression rules unchanged in the first implementation:
+Update the existing `MixinFogRenderer` logic so that, at the tail of `FogRenderer.setupFog(...)`, it first captures:
 
+- `RenderSystem.getShaderFogStart()`
+- `RenderSystem.getShaderFogEnd()`
+- `RenderSystem.getShaderFogColor()`
+
+and writes those values into the new fog holder.
+
+### Important rule
+
+Capture must happen **before** any suppression is applied.
+
+### Why this is safe
+
+- it uses the same hook timing already present on 1.21.1,
+- it reads already-resolved fog state instead of trying to reconstruct fog math,
+- it does not require new dependencies on Sodium/Iris fog transport types.
+
+### Completion criteria
+
+- project compiles,
+- fog holder contains per-frame data after `setupFog(...)` runs,
+- no visual behavior should change yet if the captured data is not consumed anywhere.
+
+---
+
+## Step 3: keep suppression rules unchanged in the first pass
+
+After capture, preserve the current suppression behavior exactly unless a specific bug is proven.
+
+That means keeping these rules as-is:
+
+- only suppress for terrain fog,
 - only suppress when Voxy rendering is enabled,
-- only suppress when a Voxy render system is present,
-- keep the `fogEnd < 10.0f` early return,
-- keep the current fluid-camera branch exactly as-is.
+- only suppress when a Voxy render system exists,
+- if fog end is very short, return early,
+- otherwise push fog start/end far away.
 
-This is a low-risk refactor, so behavior should stay identical until runtime testing proves a specific case needs adjustment: `src/main/java/me/cortex/voxy/client/mixin/minecraft/MixinFogRenderer.java:50-64`.
+### Why this matters
 
-### Step 4: update `NormalRenderPipeline.finish(...)` to consume the holder
+This keeps the first real behavioral change as small as possible.
+The branch already depends on this suppression logic, so rewriting it too early would increase risk.
 
-Switch `NormalRenderPipeline.finish(...)` to read fog state from the new holder instead of mixin accessors.
+### What not to do yet
 
-Keep all existing behavior initially:
+Do **not** attempt to import the exact newer-branch `FogData` or viewport fog transport model into 1.21.1 during this step.
 
-- the `fogCoversAllRendering` decision
-- the current `Math.abs(end - start) > 1` threshold
-- the current uniform packing for fog blend values and fog color
-- the current alpha-blended composite behavior
+### Completion criteria
 
-Relevant current logic: `src/main/java/me/cortex/voxy/client/core/NormalRenderPipeline.java:91-127`.
+- current suppression behavior still works,
+- no regressions in normal terrain rendering,
+- very short fog cases still bypass suppression.
 
-### Step 5: define explicit lifecycle rules
+---
 
-The holder should follow clear frame-lifecycle rules:
+## Step 4: make the final Voxy composite consume captured fog
 
-- a newly captured fog state overwrites the previous one,
-- the holder is only considered valid after `FogRenderer.setupFog(...)` has executed for the current frame,
-- if a reliable frame-boundary hook is identified later, optional clearing can be added, but it is **not required** for the first pass if overwrite semantics already match current behavior.
+Update `NormalRenderPipeline.finish(...)` so that it reads the captured fog state from the new holder and uses it to drive the final composite.
 
-This keeps the plan grounded in the current code instead of inventing frame hooks before they are needed.
+The first implementation should stay conservative.
 
-### Step 6: keep Iris viewport handling unchanged
+### Recommended first-pass behavior
 
-Do **not** merge fog transport into Iris viewport capture in the first implementation.
+- only consume the holder if it is valid,
+- compute fog blend values from captured `start` and `end`,
+- pass fog color from the holder into the final shader uniforms,
+- preserve the existing alpha-blended composite path.
 
-Current evidence says:
+### Why this is the key step
 
-- viewport capture already has clear one-shot lifecycle handling,
-- viewport transport currently does not include fog,
-- `setupViewport(...)` currently does not consume fog data.
+This is the step that restores upstream intent on 1.21.1:
 
-So the plan should keep Iris viewport logic as-is unless runtime testing reveals an actual incompatibility: `src/main/java/me/cortex/voxy/client/core/util/IrisUtil.java:16-22`, `src/main/java/me/cortex/voxy/client/mixin/iris/MixinLevelRenderer.java:30-58`, `src/main/java/me/cortex/voxy/client/mixin/iris/MixinIrisRenderingPipeline.java:44-52`.
+- raw Voxy geometry is no longer directly fogged by live vanilla distance fog,
+- but the final image still receives the preserved fog envelope.
 
-## Validation checklist
+### Safety rule
 
-The validation target is to prove the refactor preserved behavior, not to chase visual changes that are outside the current contract.
+If the captured fog state is invalid for a frame, the pipeline should fall back safely rather than assuming fog data exists.
 
-1. **No active Voxy renderer**
-   - fog is still captured safely,
-   - suppression does not occur unexpectedly.
+Possible safe first-pass fallback:
 
-2. **Voxy active, no shaders**
-   - raw distant geometry is not directly fogged by the live vanilla fog state,
-   - final composite still fades using the captured fog envelope.
+- skip fog-specific composite uniforms when the holder is invalid.
 
-3. **Voxy active with Iris shader pack**
-   - viewport capture remains one-shot per frame,
-   - stale viewport data does not leak across frames,
-   - final composite still follows the fog values exposed through `RenderSystem`.
+### Completion criteria
 
-4. **Fluid camera cases**
-   - underwater / lava / powder snow behavior still matches the current branch semantics,
-   - especially the interaction with `useEnvironmentalFog` remains unchanged.
+- project compiles,
+- Voxy still renders normally,
+- final composite uses captured fog when available,
+- no crash or undefined behavior when fog holder is invalid.
 
-## Non-goals
+---
 
-The first implementation should **not**:
+## Step 5: add explicit lifecycle rules
 
-- add fog parameters to `Viewport` or `VoxyRenderSystem.setupViewport(...)` without a real 1.21.1 consumer,
-- restore newer-branch transport objects just because they existed elsewhere,
-- change the current fog blending math in `NormalRenderPipeline.finish(...)` without evidence,
-- alter Iris integration beyond preserving current lifecycle correctness.
+Define clear rules for when the holder is considered current.
+
+Initial lifecycle rules:
+
+- the holder is overwritten each frame when `FogRenderer.setupFog(...)` runs,
+- the latest captured values are the active frame values,
+- `valid` becomes true on successful capture,
+- optional clearing can happen at a proven frame boundary later, but is not required for the first implementation if overwrite semantics are enough.
+
+### Why this is safe
+
+It avoids inventing a new frame hook before the current code proves one is needed.
+
+### Completion criteria
+
+- captured state is never partly updated,
+- the holder cannot expose mixed old/new values,
+- there is a clear fallback path if capture did not occur for a frame.
+
+---
+
+## Step 6: keep Iris viewport handling unchanged for the first pass
+
+Do not merge fog transport into Iris viewport capture yet.
+
+Current 1.21.1 evidence says:
+
+- Iris viewport capture is already separate,
+- viewport transport currently carries matrices and camera only,
+- the current branch has no 1.21.1 viewport fog consumer.
+
+### Why this is safe
+
+Keeping Iris viewport handling unchanged minimizes risk and keeps the downport focused on the real requirement.
+
+### Completion criteria
+
+- no viewport API changes are required for the first implementation,
+- no new Iris-only fog path is introduced unless testing proves it necessary.
+
+---
+
+## Step 7: validate behavior in controlled scenarios
+
+Validation should happen in the following order.
+
+### Scenario A: Voxy disabled or unavailable
+
+Expected result:
+
+- fog behaves exactly like normal vanilla behavior,
+- capture may occur harmlessly, but suppression must not occur.
+
+### Scenario B: Voxy enabled, no shaders
+
+Expected result:
+
+- raw distant geometry is not directly cut off by live vanilla distance/border fog,
+- final composite still applies the captured fog envelope,
+- the scene keeps the intended atmospheric fade instead of looking fully fogless.
+
+### Scenario C: short fog / special close fog cases
+
+Expected result:
+
+- the existing short-fog bypass still prevents accidental suppression,
+- close-range special fog does not disappear unexpectedly.
+
+### Scenario D: Nether / End / strong environmental fog conditions
+
+Expected result:
+
+- atmospheric fog feel is preserved in the final image,
+- Voxy does not look like it globally disabled fog,
+- only the unwanted direct raw-pass border/distance fog effect is removed.
+
+### Scenario E: Iris enabled
+
+Expected result:
+
+- no stale viewport state is introduced,
+- no new crash path appears,
+- fog capture still reflects the resolved render-thread state on the frame.
+
+---
+
+## Things deliberately out of scope for the first pass
+
+The first safe implementation should **not** do any of the following unless later testing proves they are necessary:
+
+- rewrite 1.21.1 around newer upstream viewport fog transport,
+- add fog parameters to `Viewport` immediately,
+- change Iris viewport data transport shape,
+- redesign fog math beyond using the resolved captured values,
+- change suppression heuristics beyond today's guards,
+- attempt a large shader rewrite before proving the minimal path works.
+
+## Implementation order to minimize breakage
+
+The recommended order of work is:
+
+1. add the Voxy fog holder,
+2. wire capture into the existing fog mixin,
+3. keep current suppression rules unchanged,
+4. teach the final composite to consume the captured fog,
+5. validate normal rendering and special fog cases,
+6. only then consider any optional cleanup or API reshaping.
+
+This order ensures every step is small, testable, and reversible.
+
+## Definition of done
+
+This downport is complete when all of the following are true:
+
+- Voxy no longer lets live vanilla terrain-distance fog directly fog the raw distant pass,
+- the final composite reuses captured fog values from Minecraft's resolved fog state,
+- Nether/End-style atmospheric fog feel is preserved instead of globally removed,
+- the current 1.21.1 suppression guardrails still hold,
+- no viewport or Iris API redesign was required to achieve the result,
+- the branch remains stable in no-shader and shader-enabled play.
 
 ## Summary
 
-The codebase already has the correct **1.21.1 fog semantics** in place:
+The safest achievable 1.21.1 plan is:
 
-- capture resolved fog after Minecraft sets it up,
-- suppress direct fogging for Voxy's raw pass when appropriate,
-- reapply fog during the final Voxy composite,
-- keep Iris viewport state one-shot and frame-correct.
+- keep the existing `setupFog(...)` tail hook,
+- capture the resolved fog from `RenderSystem`,
+- preserve the current suppression rules,
+- move fog state ownership into a small Voxy holder,
+- and consume that captured fog during the final Voxy composite.
 
-The solidified plan is therefore to refactor **where that fog state lives**, not **how the fog behaves**.
-
-That means introducing a Voxy-owned frame fog holder, switching the current capture and composite code to use it, and deliberately avoiding unrelated API reshaping that would create accidental drift from the current branch behavior.
-
+That delivers the upstream intent without forcing 1.21.1 to imitate newer branch internals that do not exist on this branch.

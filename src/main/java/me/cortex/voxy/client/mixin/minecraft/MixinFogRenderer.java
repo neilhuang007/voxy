@@ -3,6 +3,7 @@ package me.cortex.voxy.client.mixin.minecraft;
 import com.mojang.blaze3d.systems.RenderSystem;
 import me.cortex.voxy.client.config.VoxyConfig;
 import me.cortex.voxy.client.core.IGetVoxyRenderSystem;
+import me.cortex.voxy.client.core.util.CapturedFogState;
 import net.minecraft.client.Camera;
 import net.minecraft.client.renderer.FogRenderer;
 import org.spongepowered.asm.mixin.Mixin;
@@ -17,6 +18,13 @@ public class MixinFogRenderer {
         if (fogMode != FogRenderer.FogMode.FOG_TERRAIN) {
             return;
         }
+
+        float fogStart = RenderSystem.getShaderFogStart();
+        float fogEnd = RenderSystem.getShaderFogEnd();
+        float[] fogColor = RenderSystem.getShaderFogColor();
+        CapturedFogState.set(fogStart, fogEnd, fogColor[0], fogColor[1], fogColor[2], fogColor[3]);
+        CapturedFogState.setFogWasSuppressed(false);
+
         if (!VoxyConfig.CONFIG.isRenderingEnabled()) {
             return;
         }
@@ -24,12 +32,12 @@ public class MixinFogRenderer {
             return;
         }
 
-        float fogEnd = RenderSystem.getShaderFogEnd();
         if (fogEnd < 10.0f) {
             return;
         }
 
         RenderSystem.setShaderFogStart(99999999.0f);
         RenderSystem.setShaderFogEnd(99999999.0f);
+        CapturedFogState.setFogWasSuppressed(true);
     }
 }
