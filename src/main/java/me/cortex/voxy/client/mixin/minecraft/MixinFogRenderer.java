@@ -23,6 +23,7 @@ public class MixinFogRenderer {
         float fogEnd = RenderSystem.getShaderFogEnd();
         float[] fogColor = RenderSystem.getShaderFogColor();
         CapturedFogState.set(fogStart, fogEnd, fogColor[0], fogColor[1], fogColor[2], fogColor[3]);
+        CapturedFogState.setFrameContext(renderDistance, thickFog);
         CapturedFogState.setFogWasSuppressed(false);
 
         if (!VoxyConfig.CONFIG.isRenderingEnabled()) {
