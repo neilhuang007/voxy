@@ -6,13 +6,17 @@ import me.cortex.voxy.common.Logger;
 import me.cortex.voxy.common.config.IMappingStorage;
 import me.cortex.voxy.common.util.Pair;
 import net.minecraft.SharedConstants;
+import net.minecraft.core.BlockPos;
 import net.minecraft.core.Holder;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.NbtAccounter;
 import net.minecraft.nbt.NbtIo;
 import net.minecraft.nbt.NbtOps;
+import net.minecraft.nbt.NbtUtils;
 import net.minecraft.util.datafix.DataFixers;
 import net.minecraft.util.datafix.fixes.References;
+import net.minecraft.world.level.EmptyBlockGetter;
 import net.minecraft.world.level.biome.Biome;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
@@ -260,7 +264,7 @@ public class Mapper {
     }
 
     public int getIdForBiome(Holder<Biome> biome) {
-        String biomeId = biome.unwrapKey().get().identifier().toString();
+        String biomeId = biome.unwrapKey().orElseThrow().location().toString();
         var entry = this.biome2biomeEntry.get(biomeId);
         if (entry == null) {
             entry = this.registerNewBiome(biomeId);
@@ -359,7 +363,7 @@ public class Mapper {
             if (state.getBlock() instanceof LeavesBlock) {
                 this.opacity = 15;
             } else {
-                this.opacity = state.getLightBlock();
+                this.opacity = state.getLightBlock(EmptyBlockGetter.INSTANCE, BlockPos.ZERO);
             }
         }
 
@@ -379,29 +383,83 @@ public class Mapper {
         public static StateEntry deserialize(int id, byte[] data, boolean[] forceResave) {
             try {
                 var compound = NbtIo.readCompressed(new ByteArrayInputStream(data), NbtAccounter.unlimitedHeap());
-                if (compound.getIntOr("id", -1) != id) {
+                if (compound.getInt("id") != id) {
                     throw new IllegalStateException("Encoded id != expected id");
                 }
-                var bsc = compound.getCompound("block_state").orElseThrow();
+                var bsc = compound.getCompound("block_state");
                 var state = BlockState.CODEC.parse(NbtOps.INSTANCE, bsc);
                 if (state.isError()) {
-                    Logger.info("Could not decode blockstate, attempting fixes, error: "+ state.error().get().message());
-                    bsc = (CompoundTag) DataFixers.getDataFixer().update(References.BLOCK_STATE, new Dynamic<>(NbtOps.INSTANCE,bsc),0, SharedConstants.getCurrentVersion().dataVersion().version()).getValue();
-                    state = BlockState.CODEC.parse(NbtOps.INSTANCE, bsc);
-                    if (state.isError()) {
-                        Logger.error("Could not decode blockstate setting to air. id:" + id + " error: " + state.error().get().message());
-                        return new StateEntry(id, Blocks.AIR.defaultBlockState());
-                    } else {
-                        Logger.info("Fixed blockstate to: " + state.getOrThrow());
-                        forceResave[0] |= true;
-                        return new StateEntry(id, state.getOrThrow());
+                    Logger.info("Could not decode blockstate, attempting fixes, error: " + state.error().get().message());
+                    var fixedState = fixBlockStateTag(bsc, forceResave);
+                    if (fixedState != null) {
+                        return new StateEntry(id, fixedState);
                     }
+                    Logger.error("Could not decode blockstate setting to air. id:" + id + " error: " + state.error().get().message());
+                    return new StateEntry(id, Blocks.AIR.defaultBlockState());
                 } else {
                     return new StateEntry(id, state.getOrThrow());
                 }
             } catch (IOException e) {
                 throw new RuntimeException(e);
             }
+        }
+
+        private static BlockState fixBlockStateTag(CompoundTag blockStateTag, boolean[] forceResave) {
+            var normalizedTag = normalizeLegacyBlockStateTag(blockStateTag, forceResave);
+            if (normalizedTag != blockStateTag) {
+                try {
+                    var normalizedState = BlockState.CODEC.parse(NbtOps.INSTANCE, normalizedTag);
+                    if (normalizedState.isSuccess()) {
+                        Logger.info("Fixed blockstate through legacy alias normalization to: " + normalizedState.getOrThrow());
+                        return normalizedState.getOrThrow();
+                    }
+                } catch (RuntimeException e) {
+                    Logger.warn("Legacy alias blockstate decode failed", e);
+                }
+            }
+
+            try {
+                var fixedTag = DataFixers.getDataFixer()
+                        .update(References.BLOCK_STATE, new Dynamic<>(NbtOps.INSTANCE, normalizedTag), 0, SharedConstants.getCurrentVersion().getDataVersion().getVersion())
+                        .getValue();
+                var fixedState = BlockState.CODEC.parse(NbtOps.INSTANCE, fixedTag);
+                if (fixedState.isSuccess()) {
+                    Logger.info("Fixed blockstate through datafixer to: " + fixedState.getOrThrow());
+                    forceResave[0] = true;
+                    return fixedState.getOrThrow();
+                }
+            } catch (IllegalArgumentException ignored) {
+                Logger.warn("DataFixer does not expose BLOCK_STATE for this runtime, falling back to direct NBT decode");
+            }
+
+            try {
+                var fallbackState = NbtUtils.readBlockState(BuiltInRegistries.BLOCK.asLookup(), normalizedTag);
+                Logger.info("Fixed blockstate through direct NBT decode to: " + fallbackState);
+                forceResave[0] = true;
+                return fallbackState;
+            } catch (RuntimeException e) {
+                Logger.warn("Direct NBT blockstate decode failed", e);
+                return null;
+            }
+        }
+
+        private static CompoundTag normalizeLegacyBlockStateTag(CompoundTag blockStateTag, boolean[] forceResave) {
+            String name = blockStateTag.getString("Name");
+            String normalizedName = switch (name) {
+                case "minecraft:iron_chain" -> "minecraft:chain";
+                case "minecraft:bush" -> "minecraft:dead_bush";
+                default -> name;
+            };
+
+            if (normalizedName.equals(name)) {
+                return blockStateTag;
+            }
+
+            CompoundTag normalizedTag = blockStateTag.copy();
+            normalizedTag.putString("Name", normalizedName);
+            forceResave[0] = true;
+            Logger.warn("Normalizing legacy blockstate name", name, "to", normalizedName);
+            return normalizedTag;
         }
     }
 
@@ -430,10 +488,10 @@ public class Mapper {
         public static BiomeEntry deserialize(int id, byte[] data) {
             try {
                 var compound = NbtIo.readCompressed(new ByteArrayInputStream(data), NbtAccounter.unlimitedHeap());
-                if (compound.getIntOr("id", -1) != id) {
+                if (compound.getInt("id") != id) {
                     throw new IllegalStateException("Encoded id != expected id");
                 }
-                String biome = compound.getStringOr("biome_id", null);
+                String biome = compound.getString("biome_id");
                 return new BiomeEntry(id, biome);
             } catch (IOException e) {
                 throw new RuntimeException(e);

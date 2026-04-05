@@ -3,6 +3,7 @@ package me.cortex.voxy.client.core.rendering.util;
 import static org.lwjgl.opengl.GL33.glBindSampler;
 import static org.lwjgl.opengl.GL45.glBindTextureUnit;
 
+import me.cortex.voxy.client.mixin.minecraft.LightTextureAccessor;
 import net.minecraft.client.Minecraft;
 
 public class LightMapHelper {
@@ -12,6 +13,6 @@ public class LightMapHelper {
     }
 
     public static int getLightmapTextureId() {
-        return ((com.mojang.blaze3d.opengl.GlTexture)(Minecraft.getInstance().gameRenderer.lightTexture().getTextureView().texture())).glId();
+        return ((LightTextureAccessor) Minecraft.getInstance().gameRenderer.lightTexture()).voxy$getLightTexture().getId();
     }
 }

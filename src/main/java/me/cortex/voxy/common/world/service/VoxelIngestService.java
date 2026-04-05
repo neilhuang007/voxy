@@ -16,7 +16,6 @@ import net.minecraft.world.level.LightLayer;
 import net.minecraft.world.level.chunk.DataLayer;
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.chunk.LevelChunkSection;
-import net.minecraft.world.level.lighting.LayerLightSectionStorage;
 import org.jetbrains.annotations.NotNull;
 
 import java.util.concurrent.ConcurrentLinkedDeque;
@@ -101,22 +100,24 @@ public class VoxelIngestService {
         var lightingProvider = chunk.getLevel().getLightEngine();
         boolean gotLighting = false;
 
-        int i = chunk.getMinSectionY() - 1;
+        var blp = lightingProvider.getLayerListener(LightLayer.BLOCK);
+        var slp = lightingProvider.getLayerListener(LightLayer.SKY);
+
+        int i = (chunk.getMinBuildHeight() >> 4) - 1;
         boolean allEmpty = true;
         for (var section : chunk.getSections()) {
             i++;
             if (section == null || !shouldIngestSection(section, chunk.getPos().x, i, chunk.getPos().z)) continue;
-            allEmpty&=section.hasOnlyAir();
-            //if (section.isEmpty()) continue;
+            allEmpty &= section.hasOnlyAir();
             var pos = SectionPos.of(chunk.getPos(), i);
-            if (lightingProvider.getDebugSectionType(LightLayer.SKY, pos) != LayerLightSectionStorage.SectionType.LIGHT_AND_DATA && lightingProvider.getDebugSectionType(LightLayer.BLOCK, pos) != LayerLightSectionStorage.SectionType.LIGHT_AND_DATA)
-                continue;
-            gotLighting = true;
+            if (blp.getDataLayerData(pos) != null || slp.getDataLayerData(pos) != null) {
+                gotLighting = true;
+            }
         }
 
         if (allEmpty&&!gotLighting) {
             //Special case all empty chunk columns, we need to clear it out
-            i = chunk.getMinSectionY() - 1;
+            i = (chunk.getMinBuildHeight() >> 4) - 1;
             for (var section : chunk.getSections()) {
                 i++;
                 if (section == null || !shouldIngestSection(section, chunk.getPos().x, i, chunk.getPos().z)) continue;
@@ -135,11 +136,8 @@ public class VoxelIngestService {
             return false;
         }
 
-        var blp = lightingProvider.getLayerListener(LightLayer.BLOCK);
-        var slp = lightingProvider.getLayerListener(LightLayer.SKY);
 
-
-        i = chunk.getMinSectionY() - 1;
+        i = (chunk.getMinBuildHeight() >> 4) - 1;
         for (var section : chunk.getSections()) {
             i++;
             if (section == null || !shouldIngestSection(section, chunk.getPos().x, i, chunk.getPos().z)) continue;

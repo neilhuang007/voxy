@@ -2,9 +2,7 @@ package me.cortex.voxy.client.core.model.bakery;
 
 
 import me.cortex.voxy.common.util.MemoryBuffer;
-import net.minecraft.client.model.geom.builders.UVPair;
 import net.minecraft.client.renderer.block.model.BakedQuad;
-import net.minecraft.client.renderer.texture.MipmapStrategy;
 import org.lwjgl.system.MemoryUtil;
 
 import com.mojang.blaze3d.vertex.VertexConsumer;
@@ -76,20 +74,20 @@ public final class ReuseVertexConsumer implements VertexConsumer {
         return this;
     }
 
-    @Override
-    public VertexConsumer setLineWidth(float f) {
-        return null;
-    }
-
     public ReuseVertexConsumer quad(BakedQuad quad, int metadata) {
-        this.anyShaded |= quad.shade();
-        this.anyDarkendTex |= quad.sprite().contents().mipmapStrategy == MipmapStrategy.DARK_CUTOUT;
+        this.anyShaded |= quad.isShade();
+        this.anyDarkendTex |= false;
         this.ensureCanPut();
+        int[] data = quad.getVertices();
         for (int i = 0; i < 4; i++) {
-            var pos = quad.position(i);
-            this.addVertex(pos.x(), pos.y(), pos.z());
-            long puv = quad.packedUV(i);
-            this.setUv(UVPair.unpackU(puv),UVPair.unpackV(puv));
+            int offset = i * 8;
+            float x = Float.intBitsToFloat(data[offset]);
+            float y = Float.intBitsToFloat(data[offset + 1]);
+            float z = Float.intBitsToFloat(data[offset + 2]);
+            this.addVertex(x, y, z);
+            float u = Float.intBitsToFloat(data[offset + 4]);
+            float v = Float.intBitsToFloat(data[offset + 5]);
+            this.setUv(u, v);
 
             this.meta(metadata);
         }
