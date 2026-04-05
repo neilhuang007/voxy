@@ -75,6 +75,7 @@ public class NormalRenderPipeline extends AbstractRenderPipeline {
         }
 
         this.initDepthStencil(sourceFB, this.fb.framebuffer.id, viewport.width, viewport.height, viewport.width, viewport.height);
+        this.clearColourAttachment(this.fb.framebuffer.id, 0);
 
         return this.fb.getDepthTex().id;
     }

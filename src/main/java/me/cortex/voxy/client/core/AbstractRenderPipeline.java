@@ -60,6 +60,7 @@ public abstract class AbstractRenderPipeline extends TrackedObject {
     protected final boolean deferTranslucency;
 
     private static final int DEPTH_SAMPLER = glGenSamplers();
+    private static final float[] TRANSPARENT_BLACK = {0.0f, 0.0f, 0.0f, 0.0f};
     static {
         glSamplerParameteri(DEPTH_SAMPLER, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
         glSamplerParameteri(DEPTH_SAMPLER, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
@@ -161,6 +162,11 @@ public abstract class AbstractRenderPipeline extends TrackedObject {
         //Make voxy terrain render only where there isnt mc terrain
         glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
         glStencilFunc(GL_EQUAL, 1, 0xFF);
+    }
+
+    protected void clearColourAttachment(int framebuffer, int attachmentIndex) {
+        glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+        glClearBufferfv(GL_COLOR, attachmentIndex, TRANSPARENT_BLACK);
     }
 
     private static final long SCRATCH = MemoryUtil.nmemAlloc(4*4*4);
