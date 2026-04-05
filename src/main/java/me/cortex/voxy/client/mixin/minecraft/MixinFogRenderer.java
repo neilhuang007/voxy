@@ -13,6 +13,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 @Mixin(value = FogRenderer.class, priority = 900)
 public class MixinFogRenderer {
+    private static final float SUPPRESSED_FOG_DISTANCE = 99999999.0f;
+
     @Inject(method = "setupFog", at = @At("TAIL"))
     private static void voxy$modifyFog(Camera camera, FogRenderer.FogMode fogMode, float renderDistance, boolean thickFog, float partialTick, CallbackInfo ci) {
         if (fogMode != FogRenderer.FogMode.FOG_TERRAIN) {
@@ -22,9 +24,7 @@ public class MixinFogRenderer {
         float fogStart = RenderSystem.getShaderFogStart();
         float fogEnd = RenderSystem.getShaderFogEnd();
         float[] fogColor = RenderSystem.getShaderFogColor();
-        CapturedFogState.set(fogStart, fogEnd, fogColor[0], fogColor[1], fogColor[2], fogColor[3]);
-        CapturedFogState.setFrameContext(renderDistance, thickFog);
-        CapturedFogState.setFogWasSuppressed(false);
+        CapturedFogState.capture(fogStart, fogEnd, fogColor[0], fogColor[1], fogColor[2], fogColor[3], thickFog);
 
         if (!VoxyConfig.CONFIG.isRenderingEnabled()) {
             return;
@@ -32,13 +32,15 @@ public class MixinFogRenderer {
         if (IGetVoxyRenderSystem.getNullable() == null) {
             return;
         }
-
         if (fogEnd < 10.0f) {
             return;
         }
 
-        RenderSystem.setShaderFogStart(99999999.0f);
-        RenderSystem.setShaderFogEnd(99999999.0f);
-        CapturedFogState.setFogWasSuppressed(true);
+        if (CapturedFogState.shouldTagBorderDistanceFog(renderDistance, fogEnd)) {
+            CapturedFogState.tagBorderDistanceFog();
+        }
+
+        RenderSystem.setShaderFogStart(SUPPRESSED_FOG_DISTANCE);
+        RenderSystem.setShaderFogEnd(SUPPRESSED_FOG_DISTANCE);
     }
 }

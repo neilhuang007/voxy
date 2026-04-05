@@ -1,27 +1,20 @@
 package me.cortex.voxy.client.core.util;
 
 public final class CapturedFogState {
-    public enum FogClassification {
-        NONE,
-        SHORT_SPECIAL,
-        THICK_SPECIAL,
-        LIKELY_RENDER_DISTANCE,
-        UNKNOWN
-    }
+    private static final float SHORT_FOG_END = 10.0f;
+    private static final float MIN_BORDER_DISTANCE_FOG_END = 32.0f;
 
     private static float fogStart;
     private static float fogEnd;
     private static final float[] fogColor = new float[4];
     private static boolean valid;
-    private static boolean fogWasSuppressed;
-    private static float renderDistance;
-    private static boolean thickFog;
-    private static FogClassification fogClassification = FogClassification.NONE;
+    private static boolean compositeFogEligible;
+    private static boolean borderDistanceFog;
 
     private CapturedFogState() {
     }
 
-    public static void set(float start, float end, float red, float green, float blue, float alpha) {
+    public static void capture(float start, float end, float red, float green, float blue, float alpha, boolean thickFog) {
         fogStart = start;
         fogEnd = end;
         fogColor[0] = red;
@@ -29,13 +22,17 @@ public final class CapturedFogState {
         fogColor[2] = blue;
         fogColor[3] = alpha;
         valid = true;
-        fogClassification = classifyCurrent();
+        compositeFogEligible = end < SHORT_FOG_END || thickFog;
+        borderDistanceFog = false;
     }
 
-    public static void setFrameContext(float frameRenderDistance, boolean frameThickFog) {
-        renderDistance = frameRenderDistance;
-        thickFog = frameThickFog;
-        fogClassification = classifyCurrent();
+    public static void tagBorderDistanceFog() {
+        borderDistanceFog = true;
+        compositeFogEligible = false;
+    }
+
+    public static boolean shouldTagBorderDistanceFog(float renderDistance, float fogEnd) {
+        return renderDistance > 0.0f && fogEnd >= Math.max(renderDistance * 0.75f, MIN_BORDER_DISTANCE_FOG_END);
     }
 
     public static void clear() {
@@ -46,10 +43,8 @@ public final class CapturedFogState {
         fogColor[2] = 0.0f;
         fogColor[3] = 0.0f;
         valid = false;
-        fogWasSuppressed = false;
-        renderDistance = 0.0f;
-        thickFog = false;
-        fogClassification = FogClassification.NONE;
+        compositeFogEligible = false;
+        borderDistanceFog = false;
     }
 
     public static float getFogStart() {
@@ -80,41 +75,12 @@ public final class CapturedFogState {
         return valid;
     }
 
-    public static float getRenderDistance() {
-        return renderDistance;
+    public static boolean shouldApplyCompositeFog() {
+        return valid && compositeFogEligible && Math.abs(fogEnd - fogStart) > 1.0f;
     }
 
-    public static boolean isThickFog() {
-        return thickFog;
-    }
-
-    public static void setFogWasSuppressed(boolean suppressed) {
-        fogWasSuppressed = suppressed;
-        fogClassification = classifyCurrent();
-    }
-
-    public static boolean fogWasSuppressed() {
-        return fogWasSuppressed;
-    }
-
-    public static FogClassification getFogClassification() {
-        return fogClassification;
-    }
-
-    private static FogClassification classifyCurrent() {
-        if (!valid) {
-            return FogClassification.NONE;
-        }
-        if (fogEnd < 10.0f) {
-            return FogClassification.SHORT_SPECIAL;
-        }
-        if (fogWasSuppressed && renderDistance > 0.0f && fogEnd >= Math.max(renderDistance * 0.75f, 32.0f)) {
-            return FogClassification.LIKELY_RENDER_DISTANCE;
-        }
-        if (thickFog) {
-            return FogClassification.THICK_SPECIAL;
-        }
-        return FogClassification.UNKNOWN;
+    public static boolean isBorderDistanceFog() {
+        return borderDistanceFog;
     }
 }
 

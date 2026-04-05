@@ -91,10 +91,7 @@ public class NormalRenderPipeline extends AbstractRenderPipeline {
         this.finalBlit.bind();
 
         if (this.useEnvFog) {
-            if (CapturedFogState.isValid()
-                    && (CapturedFogState.getFogClassification() == CapturedFogState.FogClassification.SHORT_SPECIAL
-                    || CapturedFogState.getFogClassification() == CapturedFogState.FogClassification.THICK_SPECIAL)
-                    && Math.abs(CapturedFogState.getFogEnd() - CapturedFogState.getFogStart()) > 1.0f) {
+            if (CapturedFogState.shouldApplyCompositeFog()) {
                 float start = CapturedFogState.getFogStart();
                 float end = CapturedFogState.getFogEnd();
                 float invEndFogDelta = 1f / (end - start);
