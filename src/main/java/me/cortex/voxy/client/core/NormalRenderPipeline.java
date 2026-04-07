@@ -75,7 +75,6 @@ public class NormalRenderPipeline extends AbstractRenderPipeline {
         }
 
         this.initDepthStencil(sourceFB, this.fb.framebuffer.id, viewport.width, viewport.height, viewport.width, viewport.height);
-        this.clearColourAttachment(this.fb.framebuffer.id, 0);
 
         return this.fb.getDepthTex().id;
     }
@@ -91,8 +90,10 @@ public class NormalRenderPipeline extends AbstractRenderPipeline {
     protected void finish(Viewport<?> viewport, int sourceFrameBuffer, int srcWidth, int srcHeight) {
         this.finalBlit.bind();
 
+        boolean fogCoversAllRendering = CapturedFogState.fogCoversAllRendering(Minecraft.getInstance().gameRenderer.getRenderDistance());
+
         if (this.useEnvFog) {
-            if (CapturedFogState.shouldApplyCompositeFog()) {
+            if (CapturedFogState.shouldApplyCompositeFog(this.useEnvFog)) {
                 float start = CapturedFogState.getFogStart();
                 float end = CapturedFogState.getFogEnd();
                 float invEndFogDelta = 1f / (end - start);
@@ -110,10 +111,15 @@ public class NormalRenderPipeline extends AbstractRenderPipeline {
 
         glBindTextureUnit(3, this.colourSSAOTex.id);
 
-        glEnable(GL_BLEND);
-        glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
-        AbstractRenderPipeline.transformBlitDepth(this.finalBlit, this.fb.getDepthTex().id, sourceFrameBuffer, viewport, new Matrix4f(viewport.vanillaProjection).mul(viewport.modelView));
-        glDisable(GL_BLEND);
+        if (!fogCoversAllRendering) {
+            glEnable(GL_BLEND);
+            glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+            AbstractRenderPipeline.transformBlitDepth(this.finalBlit, this.fb.getDepthTex().id, sourceFrameBuffer, viewport, new Matrix4f(viewport.vanillaProjection).mul(viewport.modelView));
+            glDisable(GL_BLEND);
+        } else {
+            glDisable(GL_STENCIL_TEST);
+            glDisable(GL_DEPTH_TEST);
+        }
     }
 
     @Override

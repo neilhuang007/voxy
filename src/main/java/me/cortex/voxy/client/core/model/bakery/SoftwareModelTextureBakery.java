@@ -205,11 +205,7 @@ public class SoftwareModelTextureBakery {
         boolean isBlock = true;
         RenderType layer;
         if (state.getBlock() instanceof LiquidBlock) {
-            if (state.getFluidState().isSource()) {
-                layer = RenderType.translucent();
-            } else {
-                layer = RenderType.solid();
-            }
+            layer = ItemBlockRenderTypes.getRenderLayer(state.getFluidState());
             isBlock = false;
         } else {
             layer = ItemBlockRenderTypes.getChunkRenderType(state);

@@ -113,7 +113,7 @@ public class MipGen {
                     int C01 = MemoryUtil.memGetInt(bp+sWidth*4);
                     int C10 = MemoryUtil.memGetInt(bp+4);
                     int C11 = MemoryUtil.memGetInt(bp+sWidth*4+4);
-                    MemoryUtil.memPutInt(dAddr + (px+py*width) * 4L, TextureUtils.mipColours(C00, C01, C10, C11));
+                    MemoryUtil.memPutInt(dAddr + (px+py*width) * 4L, TextureUtils.mipColours(darkened, C00, C01, C10, C11));
                 }
             }
         }

@@ -24,7 +24,7 @@ public class MixinFogRenderer {
         float fogStart = RenderSystem.getShaderFogStart();
         float fogEnd = RenderSystem.getShaderFogEnd();
         float[] fogColor = RenderSystem.getShaderFogColor();
-        CapturedFogState.capture(fogStart, fogEnd, fogColor[0], fogColor[1], fogColor[2], fogColor[3], thickFog);
+        CapturedFogState.capture(fogStart, fogEnd, fogColor[0], fogColor[1], fogColor[2], fogColor[3]);
 
         if (!VoxyConfig.CONFIG.isRenderingEnabled()) {
             return;
@@ -32,7 +32,7 @@ public class MixinFogRenderer {
         if (IGetVoxyRenderSystem.getNullable() == null) {
             return;
         }
-        if (fogEnd < 10.0f) {
+        if (!CapturedFogState.shouldSuppressFog(renderDistance, fogEnd, VoxyConfig.CONFIG.useEnvironmentalFog)) {
             return;
         }
 

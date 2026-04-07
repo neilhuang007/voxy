@@ -369,7 +369,9 @@ public class VoxyRenderSystem {
     }
 
     private static float getGameFoV() {
-        return Minecraft.getInstance().options.fov().get();
+        var client = Minecraft.getInstance();
+        var projection = client.gameRenderer.getProjectionMatrix(client.getTimer().getGameTimeDeltaPartialTick(true));
+        return (float) Math.toDegrees(2.0 * Math.atan(1.0 / projection.m11()));
     }
 
     private static Matrix4f makeProjectionMatrix(float near, float far) {
